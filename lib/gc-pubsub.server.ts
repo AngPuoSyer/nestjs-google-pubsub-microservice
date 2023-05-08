@@ -1,5 +1,6 @@
 import {
   ClientConfig,
+  CreateSubscriptionOptions,
   Message,
   PubSub,
   Subscription,
@@ -21,7 +22,7 @@ import {
 } from '@nestjs/microservices/constants';
 import { isString, isUndefined } from '@nestjs/common/utils/shared.utils';
 
-import { GCPubSubOptions } from './gc-pubsub.interface';
+import { GCPubSubOptions, NewSubscriptionFlag } from './gc-pubsub.interface';
 import {
   ALREADY_EXISTS,
   GC_PUBSUB_DEFAULT_CLIENT_CONFIG,
@@ -36,23 +37,29 @@ import {
 import { GCPubSubContext } from './gc-pubsub.context';
 import { closePubSub, closeSubscription, flushTopic } from './gc-pubsub.utils';
 
-export class GCPubSubServer extends Server implements CustomTransportStrategy {
+export class GCPubSubServer<T extends NewSubscriptionFlag>
+  extends Server
+  implements CustomTransportStrategy
+{
   protected logger = new Logger(GCPubSubServer.name);
 
   protected readonly clientConfig: ClientConfig;
   protected readonly topicName: string;
   protected readonly publisherConfig: PublishOptions;
   protected readonly subscriptionName: string;
-  protected readonly subscriberConfig: SubscriberOptions;
+  protected readonly subscriberConfig:
+    | SubscriberOptions
+    | CreateSubscriptionOptions;
   protected readonly noAck: boolean;
   protected readonly replyTopics: Set<string>;
   protected readonly init: boolean;
   protected readonly checkExistence: boolean;
+  protected readonly newSubscription: boolean;
 
   protected client: PubSub | null = null;
   protected subscription: Subscription | null = null;
 
-  constructor(protected readonly options: GCPubSubOptions) {
+  constructor(protected readonly options: GCPubSubOptions<T>) {
     super();
 
     this.clientConfig = this.options.client || GC_PUBSUB_DEFAULT_CLIENT_CONFIG;
@@ -72,6 +79,8 @@ export class GCPubSubServer extends Server implements CustomTransportStrategy {
     this.init = this.options.init ?? GC_PUBSUB_DEFAULT_INIT;
     this.checkExistence =
       this.options.checkExistence ?? GC_PUBSUB_DEFAULT_CHECK_EXISTENCE;
+
+    this.newSubscription = this.options.newSubscription;
 
     this.replyTopics = new Set();
 
@@ -94,10 +103,18 @@ export class GCPubSubServer extends Server implements CustomTransportStrategy {
       }
     }
 
-    this.subscription = topic.subscription(
-      this.subscriptionName,
-      this.subscriberConfig,
-    );
+    if (this.newSubscription) {
+      const [subscription] = await topic.createSubscription(
+        this.subscriptionName,
+        this.subscriberConfig,
+      );
+      this.subscription = subscription;
+    } else {
+      this.subscription = topic.subscription(
+        this.subscriptionName,
+        this.subscriberConfig as SubscriberOptions,
+      );
+    }
 
     if (this.init) {
       await this.createIfNotExists(
